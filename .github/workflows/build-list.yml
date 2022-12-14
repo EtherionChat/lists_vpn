@@ -15,7 +15,7 @@ jobs:
     - uses: actions/checkout@v2
     - name: Dependencies
       run: |
-        sudo apt-get install ipcalc
+        sudo apt-get install ipcalc whois
     - name: Downloading ASN database
       run: |
         curl https://iptoasn.com/data/ip2asn-v4.tsv.gz | gzip -d > /tmp/asndb.tsv
@@ -25,16 +25,19 @@ jobs:
           echo "Processing $asn"
           awk '{if($3 == '${asn:2}') print "ipcalc -rn "$1"-"$2" | tail -n1"}' /tmp/asndb.tsv | bash >> /tmp/asn-processed.txt
         done
+    - name: Generate IPv6 list
+      run: |
+        cat $GITHUB_WORKSPACE/input/ASN.txt | sed -E 's/ ?#.+//g' | while read ASN; do
+          whois -h whois.radb.net -- "-i origin $ASN" | grep -Eo "route6:.+" | sed -E 's/route6?\: +//g'
+        done >> ipv6.txt
     - name: Merge Lists
       run: |
         # Remove too small allocations from ASN list (anything less than a /24 can't be announced)
         # TODO: This might remove some SWIP'ed ranges (needs evaluation)
         perl ./helpers/cleanup.pl /tmp/asn-processed.txt | grep -E '/(2[0-4]|1[0-9]|[0-9])$' > /tmp/asn-cleaned.txt
-
         # Combine lists
         cat $GITHUB_WORKSPACE/input/ips/*.txt | grep -v '^#' | awk '{print $1}' | sed '/^$/d' > /tmp/manual-processed.txt
         cat /tmp/asn-cleaned.txt /tmp/manual-processed.txt | sort -n > /tmp/ipv4.txt
-
         # Final cleanup
         perl ./helpers/cleanup.pl /tmp/ipv4.txt > ipv4.txt
     - name: Test generated Lists
@@ -47,7 +50,6 @@ jobs:
           echo "Lists can not contain 12.0.0.1/8"
           exit 1
         fi
-
         ips_covered=$(awk -F/ 'BEGIN{a=0}{if($2==""){a+=1}else{a+=2^(32-$2)}}END{print a}' ipv4.txt)
         if [[ "$ips_covered" -lt 13970713 ]]; then
           echo "Too few addresses covered"
@@ -60,7 +62,7 @@ jobs:
     - name: Push Output of ipv4.txt
       uses: X4BNet/copy_file_to_another_repo_action@main
       env:
-        API_TOKEN_GITHUB: ${{ secrets.MY_GITHUB_TOKEN }}
+        API_TOKEN_GITHUB: ${{ secrets.GITHUB_TOKEN }}
       with:
         source_file: 'ipv4.txt'
         destination_repo: '${{ github.repository }}'
@@ -68,4 +70,14 @@ jobs:
         user_email: 'automated@x4b.net'
         user_name: 'listbuilder'
         destination_branch: "main"
-
+    - name: Push Output of ipv6.txt
+      uses: X4BNet/copy_file_to_another_repo_action@main
+      env:
+        API_TOKEN_GITHUB: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        source_file: 'ipv6.txt'
+        destination_repo: '${{ github.repository }}'
+        destination_folder: '/'
+        user_email: 'automated@x4b.net'
+        user_name: 'listbuilder'
+        destination_branch: "main"
